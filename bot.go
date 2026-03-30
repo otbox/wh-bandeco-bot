@@ -287,32 +287,47 @@ func startPolling() {
 
 // ================= MAIN =================
 
+func configurarInstancia() {
+	apiURL := fmt.Sprintf("%s/waInstance%s/setSettings/%s", API_URL, getInstance(), getToken())
+
+	payload := map[string]interface{}{
+		"incomingWebhook": "yes",
+		"outgoingWebhook": "no",
+		"stateWebhook":    "no",
+		"webhookUrl":      "", // vazio = usa HTTP API polling, não webhook
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Println("Erro ao configurar instância:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	log.Println("Configuração da instância:", result)
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Arquivo .env não encontrado, usando variáveis de ambiente do sistema")
 	}
 
-	// DEBUG — remove depois de confirmar que está funcionando
-	log.Println("INSTANCE:", getInstance())
-	log.Println("TOKEN:", getToken()[:6]+"...") // mostra só os primeiros 6 chars por segurança
-	log.Println("CHAT:", getChatId())
+	configurarInstancia() // ← adiciona aqui
 
 	log.Println("Bot RU Unicamp iniciado!")
-
-	// Polling roda em goroutine paralela
 	go startPolling()
 
-	// Servidor HTTP para o Render não matar o processo
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-
-	log.Println("Servidor HTTP na porta", port, HARDCODED_CHAT, HARDCODED_INSTANCE, HARDCODED_TOKEN)
+	log.Println("Servidor HTTP na porta", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
