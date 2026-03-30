@@ -287,6 +287,11 @@ func main() {
 		log.Println("Arquivo .env não encontrado, usando variáveis de ambiente do sistema")
 	}
 
+	// DEBUG — remove depois de confirmar que está funcionando
+	log.Println("INSTANCE:", getInstance())
+	log.Println("TOKEN:", getToken()[:6]+"...") // mostra só os primeiros 6 chars por segurança
+	log.Println("CHAT:", getChatId())
+
 	log.Println("Bot RU Unicamp iniciado!")
 
 	// Polling roda em goroutine paralela
