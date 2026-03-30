@@ -1,0 +1,13 @@
+services:
+  - type: worker        # worker = processo contínuo sem HTTP, ideal pro polling
+    name: ru-bot
+    runtime: go
+    buildCommand: go build -o app .
+    startCommand: ./app
+    envVars:
+      - key: GREEN_API_INSTANCE
+        value: sua_instancia
+      - key: GREEN_API_TOKEN
+        value: seu_token
+      - key: GREEN_API_CHAT
+        value: 5511999999999@c.us
