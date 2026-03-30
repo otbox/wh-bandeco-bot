@@ -20,7 +20,7 @@ const (
 	HARDCODED_INSTANCE = ""
 	HARDCODED_TOKEN    = ""
 	HARDCODED_CHAT     = ""
-	API_URL            = "https://api.green-api.com"
+	API_URL            = "https://wh-bandeco-bot.onrender.com/"
 )
 
 func getEnv(key, hardcoded string) string {
