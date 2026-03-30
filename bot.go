@@ -181,9 +181,14 @@ func receiveNotification() (*Notification, error) {
 	}
 	defer resp.Body.Close()
 
+	// DEBUG — lê o body bruto e loga
+	bodyBytes := new(bytes.Buffer)
+	bodyBytes.ReadFrom(resp.Body)
+	log.Println("RAW response:", bodyBytes.String())
+
 	if resp.StatusCode == 200 {
 		var result Notification
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		if err := json.Unmarshal(bodyBytes.Bytes(), &result); err != nil {
 			return nil, nil
 		}
 		if result.ReceiptId == 0 {
