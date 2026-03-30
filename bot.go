@@ -166,13 +166,11 @@ func sendWhatsAppMessage(message string) {
 
 // ================= POLLING =================
 
-// Estrutura da notificação recebida
 type Notification struct {
-	ReceiptId   int                    `json:"receiptId"`
-	Body        map[string]interface{} `json:"body"`
+	ReceiptId int                    `json:"receiptId"`
+	Body      map[string]interface{} `json:"body"`
 }
 
-// Busca a próxima notificação na fila (aguarda até 5s)
 func receiveNotification() (*Notification, error) {
 	apiURL := fmt.Sprintf("%s/waInstance%s/receiveNotification/%s", API_URL, getInstance(), getToken())
 
@@ -182,14 +180,13 @@ func receiveNotification() (*Notification, error) {
 	}
 	defer resp.Body.Close()
 
-	// Fila vazia — retorna nil sem erro
 	if resp.StatusCode == 200 {
 		var result Notification
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, nil // body vazio = sem mensagem
+			return nil, nil
 		}
 		if result.ReceiptId == 0 {
-			return nil, nil // sem notificação
+			return nil, nil
 		}
 		return &result, nil
 	}
@@ -197,7 +194,6 @@ func receiveNotification() (*Notification, error) {
 	return nil, fmt.Errorf("status inesperado: %d", resp.StatusCode)
 }
 
-// Confirma e deleta a notificação da fila
 func deleteNotification(receiptId int) error {
 	apiURL := fmt.Sprintf("%s/waInstance%s/deleteNotification/%s/%d",
 		API_URL, getInstance(), getToken(), receiptId)
@@ -215,11 +211,9 @@ func deleteNotification(receiptId int) error {
 	return nil
 }
 
-// Processa o conteúdo da notificação
 func processarNotificacao(notif *Notification) {
 	body := notif.Body
 
-	// Só processa mensagens recebidas
 	typeWebhook, _ := body["typeWebhook"].(string)
 	if typeWebhook != "incomingMessageReceived" {
 		return
@@ -238,7 +232,7 @@ func processarNotificacao(notif *Notification) {
 
 	textData, ok := messageData["textMessageData"].(map[string]interface{})
 	if !ok {
-		return // ignora mensagens que não são texto (áudio, imagem, etc.)
+		return
 	}
 
 	text := strings.ToLower(textData["textMessage"].(string))
@@ -266,27 +260,19 @@ func processarNotificacao(notif *Notification) {
 	}
 }
 
-// Loop principal de polling — roda para sempre
 func startPolling() {
 	log.Println("Iniciando polling de mensagens...")
-
 	for {
 		notif, err := receiveNotification()
 		if err != nil {
 			log.Println("Erro ao receber notificação:", err)
-			time.Sleep(5 * time.Second) // espera um pouco antes de tentar de novo
+			time.Sleep(5 * time.Second)
 			continue
 		}
-
 		if notif == nil {
-			// Sem mensagem — chama de novo imediatamente (o próprio receiveNotification já aguardou 5s)
 			continue
 		}
-
-		// Processa a mensagem
 		processarNotificacao(notif)
-
-		// Deleta da fila para avançar para a próxima
 		if err := deleteNotification(notif.ReceiptId); err != nil {
 			log.Println("Erro ao deletar notificação:", notif.ReceiptId, err)
 		}
@@ -297,5 +283,21 @@ func startPolling() {
 
 func main() {
 	log.Println("Bot RU Unicamp iniciado!")
-	startPolling() // bloqueia aqui para sempre
+
+	// Polling roda em goroutine paralela
+	go startPolling()
+
+	// Servidor HTTP para o Render não matar o processo
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	log.Println("Servidor HTTP na porta", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
