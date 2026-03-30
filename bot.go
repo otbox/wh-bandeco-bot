@@ -20,7 +20,7 @@ const (
 	HARDCODED_INSTANCE = ""
 	HARDCODED_TOKEN    = ""
 	HARDCODED_CHAT     = ""
-	API_URL            = "https://wh-bandeco-bot.onrender.com/"
+	API_URL            = "https://wh-bandeco-bot.onrender.com:10000/"
 )
 
 func getEnv(key, hardcoded string) string {
@@ -302,6 +302,6 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	log.Println("Servidor HTTP na porta", port)
+	log.Println("Servidor HTTP na porta", port, HARDCODED_CHAT, HARDCODED_INSTANCE, HARDCODED_TOKEN)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
