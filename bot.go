@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/joho/godotenv"
 )
 
 // ================= CONFIGURAÇÃO =================
@@ -282,6 +283,9 @@ func startPolling() {
 // ================= MAIN =================
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("Arquivo .env não encontrado, usando variáveis de ambiente do sistema")
+	}
 	log.Println("Bot RU Unicamp iniciado!")
 
 	// Polling roda em goroutine paralela
