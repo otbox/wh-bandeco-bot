@@ -17,10 +17,13 @@ import (
 
 // ================= CONFIGURAÇÃO =================
 const (
-	HARDCODED_INSTANCE = ""
-	HARDCODED_TOKEN    = ""
-	HARDCODED_CHAT     = ""
-	API_URL            = "https://api.green-api.com"
+	HARDCODED_INSTANCE      = ""
+	HARDCODED_TOKEN         = ""
+	HARDCODED_CHAT          = ""
+	HARDCODED_OPENROUTER_KEY = ""
+	API_URL                 = "https://api.green-api.com"
+	OPENROUTER_URL          = "https://openrouter.ai/api/v1/chat/completions"
+	OPENROUTER_MODEL        = "mistralai/mistral-7b-instruct:free" // modelo gratuito
 )
 
 func getEnv(key, hardcoded string) string {
@@ -30,9 +33,10 @@ func getEnv(key, hardcoded string) string {
 	return os.Getenv(key)
 }
 
-func getInstance() string { return getEnv("GREEN_API_INSTANCE", HARDCODED_INSTANCE) }
-func getToken() string    { return getEnv("GREEN_API_TOKEN", HARDCODED_TOKEN) }
-func getChatId() string   { return getEnv("GREEN_API_CHAT", HARDCODED_CHAT) }
+func getInstance() string      { return getEnv("GREEN_API_INSTANCE", HARDCODED_INSTANCE) }
+func getToken() string         { return getEnv("GREEN_API_TOKEN", HARDCODED_TOKEN) }
+func getChatId() string        { return getEnv("GREEN_API_CHAT", HARDCODED_CHAT) }
+func getOpenRouterKey() string { return getEnv("OPENROUTER_API_KEY", HARDCODED_OPENROUTER_KEY) }
 
 // ================= STRUCTS =================
 
@@ -82,8 +86,29 @@ func buscarCardapio(dataAlvo string) (*CardapioDia, error) {
 	dataDia := strings.TrimSpace(doc.Find("#dia .col-12.h3").Text())
 	almocoPadrao := extrairRefeicao(*doc.Find("#normal .col-6").Eq(0).Find("table"))
 	almocoVegano := extrairRefeicao(*doc.Find("#normal .col-6").Eq(1).Find("table"))
+
+	// Tenta os seletores mais prováveis para o jantar
 	jantarPadrao := extrairRefeicao(*doc.Find("#jantar .col-6").Eq(0).Find("table"))
 	jantarVegano := extrairRefeicao(*doc.Find("#jantar .col-6").Eq(1).Find("table"))
+
+	// Fallback: tenta #vegetariano caso o site use outro id
+	if jantarPadrao == "" {
+		jantarPadrao = extrairRefeicao(*doc.Find("#vegetariano .col-6").Eq(0).Find("table"))
+		jantarVegano = extrairRefeicao(*doc.Find("#vegetariano .col-6").Eq(1).Find("table"))
+	}
+
+	// Fallback 2: tenta pegar pelo índice geral de tabelas
+	if jantarPadrao == "" {
+		log.Println("WARN: jantar não encontrado pelos seletores normais, tentando fallback por índice")
+		allSections := doc.Find(".col-6")
+		if allSections.Length() >= 4 {
+			jantarPadrao = extrairRefeicao(*allSections.Eq(2).Find("table"))
+			jantarVegano = extrairRefeicao(*allSections.Eq(3).Find("table"))
+		}
+	}
+
+	log.Printf("DEBUG cardápio - Data: %s | Almoço P: %d chars | Jantar P: %d chars",
+		dataDia, len(almocoPadrao), len(jantarPadrao))
 
 	return &CardapioDia{
 		Data:   dataDia,
@@ -133,6 +158,15 @@ func formatarSemana(semana []*CardapioDia) string {
 }
 
 func formatarMensagem(cardapio *CardapioDia) string {
+	jantar := cardapio.Jantar.Padrao
+	if jantar == "" {
+		jantar = "Não disponível"
+	}
+	jantarVeg := cardapio.Jantar.Vegano
+	if jantarVeg == "" {
+		jantarVeg = "Não disponível"
+	}
+
 	return fmt.Sprintf(
 		"🍽️ Cardápio RU - %s\n\n"+
 			"🍛 ALMOÇO (Padrão):\n%s\n\n"+
@@ -142,9 +176,64 @@ func formatarMensagem(cardapio *CardapioDia) string {
 		cardapio.Data,
 		cardapio.Almoco.Padrao,
 		cardapio.Almoco.Vegano,
-		cardapio.Jantar.Padrao,
-		cardapio.Jantar.Vegano,
+		jantar,
+		jantarVeg,
 	)
+}
+
+// ================= OPENROUTER =================
+
+func perguntarOpenRouter(pergunta string) string {
+	key := getOpenRouterKey()
+	if key == "" {
+		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
+	}
+
+	payload := map[string]interface{}{
+		"model": OPENROUTER_MODEL,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e amigável em português.",
+			},
+			{
+				"role":    "user",
+				"content": pergunta,
+			},
+		},
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Println("Erro ao criar request OpenRouter:", err)
+		return "Erro ao consultar IA."
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("HTTP-Referer", "https://github.com/ru-bot")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Println("Erro ao chamar OpenRouter:", err)
+		return "Erro ao consultar IA."
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "Erro ao processar resposta da IA."
+	}
+
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		log.Println("OpenRouter sem choices:", result)
+		return "Não obtive resposta da IA."
+	}
+
+	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	return msg["content"].(string)
 }
 
 // ================= WHATSAPP =================
@@ -181,14 +270,9 @@ func receiveNotification() (*Notification, error) {
 	}
 	defer resp.Body.Close()
 
-	// DEBUG — lê o body bruto e loga
-	bodyBytes := new(bytes.Buffer)
-	bodyBytes.ReadFrom(resp.Body)
-	log.Println("RAW response:", bodyBytes.String())
-
 	if resp.StatusCode == 200 {
 		var result Notification
-		if err := json.Unmarshal(bodyBytes.Bytes(), &result); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return nil, nil
 		}
 		if result.ReceiptId == 0 {
@@ -222,6 +306,7 @@ func processarNotificacao(notif *Notification) {
 
 	typeWebhook, _ := body["typeWebhook"].(string)
 	if typeWebhook != "incomingMessageReceived" {
+		log.Printf("Notificação ignorada: %s", typeWebhook)
 		return
 	}
 
@@ -241,20 +326,34 @@ func processarNotificacao(notif *Notification) {
 		return
 	}
 
-	text := strings.ToLower(textData["textMessage"].(string))
+	text := strings.ToLower(strings.TrimSpace(textData["textMessage"].(string)))
 	log.Printf("Mensagem recebida de %s: %s", chatId, text)
 
 	switch {
 	case strings.Contains(text, "/ru hoje"):
 		cardapio, err := buscarCardapio(formatDate(time.Now()))
-		if err != nil {
-			sendWhatsAppMessageTo(chatId, "Erro ao buscar cardápio de hoje 😕")
+		if err != nil || cardapio.Almoco.Padrao == "" {
+			log.Println("Cardápio hoje indisponível, consultando OpenRouter...")
+			resposta := perguntarOpenRouter(
+				"O cardápio do RU da Unicamp de hoje não está disponível no site. " +
+				"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
+			)
+			sendWhatsAppMessageTo(chatId, resposta)
 			return
 		}
 		sendWhatsAppMessageTo(chatId, formatarMensagem(cardapio))
 
 	case strings.Contains(text, "/ru semanal"):
 		semana, _ := buscarSemana()
+		if len(semana) == 0 {
+			log.Println("Cardápio semanal indisponível, consultando OpenRouter...")
+			resposta := perguntarOpenRouter(
+				"O cardápio semanal do RU da Unicamp não está disponível no site agora. " +
+				"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
+			)
+			sendWhatsAppMessageTo(chatId, resposta)
+			return
+		}
 		sendWhatsAppMessageTo(chatId, formatarSemana(semana))
 
 	case strings.Contains(text, "/ru ajuda"):
@@ -263,6 +362,13 @@ func processarNotificacao(notif *Notification) {
 				"/ru hoje — cardápio do dia\n"+
 				"/ru semanal — cardápio da semana",
 		)
+
+	default:
+		// Qualquer outra mensagem que não seja comando vai para o OpenRouter
+		if !strings.HasPrefix(text, "/") {
+			resposta := perguntarOpenRouter(text)
+			sendWhatsAppMessageTo(chatId, resposta)
+		}
 	}
 }
 
@@ -285,7 +391,7 @@ func startPolling() {
 	}
 }
 
-// ================= MAIN =================
+// ================= CONFIGURAR INSTÂNCIA =================
 
 func configurarInstancia() {
 	apiURL := fmt.Sprintf("%s/waInstance%s/setSettings/%s", API_URL, getInstance(), getToken())
@@ -294,7 +400,7 @@ func configurarInstancia() {
 		"incomingWebhook": "yes",
 		"outgoingWebhook": "no",
 		"stateWebhook":    "no",
-		"webhookUrl":      "", // vazio = usa HTTP API polling, não webhook
+		"webhookUrl":      "",
 	}
 
 	jsonData, _ := json.Marshal(payload)
@@ -310,24 +416,29 @@ func configurarInstancia() {
 	log.Println("Configuração da instância:", result)
 }
 
+// ================= MAIN =================
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Arquivo .env não encontrado, usando variáveis de ambiente do sistema")
 	}
 
-	configurarInstancia() // ← adiciona aqui
+	configurarInstancia()
 
 	log.Println("Bot RU Unicamp iniciado!")
+
 	go startPolling()
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+
 	log.Println("Servidor HTTP na porta", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
