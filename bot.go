@@ -20,7 +20,7 @@ const (
 	HARDCODED_INSTANCE = ""
 	HARDCODED_TOKEN    = ""
 	HARDCODED_CHAT     = ""
-	API_URL            = "https://wh-bandeco-bot.onrender.com:10000/"
+	API_URL            = "https://api.green-api.com"
 )
 
 func getEnv(key, hardcoded string) string {
@@ -286,7 +286,7 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Arquivo .env não encontrado, usando variáveis de ambiente do sistema")
 	}
-	
+
 	log.Println("Bot RU Unicamp iniciado!")
 
 	// Polling roda em goroutine paralela
