@@ -421,7 +421,8 @@ func selfPing(port string) {
 	// Espera 1 minuto para o servidor subir antes de começar
 	time.Sleep(1 * time.Minute)
 
-	url := fmt.Sprintf("http://localhost:%s/", port)
+	// url := fmt.Sprintf("http://localhost:%s/", port)
+	url := fmt.Sprintf("https://wh-bandeco-bot.onrender.com/")
 	log.Println("Iniciando self-ping a cada 10 minutos para:", url)
 
 	for {
@@ -442,7 +443,7 @@ func main() {
 	}
 
 	configurarInstancia()
-
+	log.Println(perguntarOpenRouter("vai porra"))
 	log.Println("Bot RU Unicamp iniciado!")
 
 	port := os.Getenv("PORT")
