@@ -194,7 +194,7 @@ func perguntarOpenRouter(pergunta string) string {
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias igual carioca em português.",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias em português.",
 			},
 			{
 				"role":    "user",
@@ -365,9 +365,12 @@ func processarNotificacao(notif *Notification) {
 
 	default:
 		// Qualquer outra mensagem que não seja comando vai para o OpenRouter
-		if !strings.HasPrefix(text, "/") {
-			resposta := perguntarOpenRouter(text)
-			sendWhatsAppMessageTo(chatId, resposta)
+		if strings.HasPrefix(text, "/ru ") {
+			campos := strings.Fields(text)
+			if len(campos) > 0 && campos[0] == "/ru" {
+				resposta := perguntarOpenRouter(text)
+				sendWhatsAppMessageTo(chatId, resposta)
+			}
 		}
 	}
 }
@@ -451,7 +454,7 @@ func main() {
 	}
 
 	go startPolling()
-	log.Println(perguntarOpenRouter("vai porra"))
+	// log.Println(perguntarOpenRouter("vai porra"))
 	go selfPing(port) // ← self-ping em goroutine paralela
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
