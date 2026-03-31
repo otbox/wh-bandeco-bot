@@ -17,13 +17,13 @@ import (
 
 // ================= CONFIGURAÇÃO =================
 const (
-	HARDCODED_INSTANCE      = ""
-	HARDCODED_TOKEN         = ""
-	HARDCODED_CHAT          = ""
+	HARDCODED_INSTANCE       = ""
+	HARDCODED_TOKEN          = ""
+	HARDCODED_CHAT           = ""
 	HARDCODED_OPENROUTER_KEY = ""
-	API_URL                 = "https://api.green-api.com"
-	OPENROUTER_URL          = "https://openrouter.ai/api/v1/chat/completions"
-	OPENROUTER_MODEL        = "mistralai/mistral-7b-instruct:free" // modelo gratuito
+	API_URL                  = "https://api.green-api.com"
+	OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
+	OPENROUTER_MODEL         = "mistralai/mistral-7b-instruct:free" // modelo gratuito
 )
 
 func getEnv(key, hardcoded string) string {
@@ -194,7 +194,7 @@ func perguntarOpenRouter(pergunta string) string {
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e amigável em português.",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias igual carioca em português.",
 			},
 			{
 				"role":    "user",
@@ -336,7 +336,7 @@ func processarNotificacao(notif *Notification) {
 			log.Println("Cardápio hoje indisponível, consultando OpenRouter...")
 			resposta := perguntarOpenRouter(
 				"O cardápio do RU da Unicamp de hoje não está disponível no site. " +
-				"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
+					"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
 			)
 			sendWhatsAppMessageTo(chatId, resposta)
 			return
@@ -349,7 +349,7 @@ func processarNotificacao(notif *Notification) {
 			log.Println("Cardápio semanal indisponível, consultando OpenRouter...")
 			resposta := perguntarOpenRouter(
 				"O cardápio semanal do RU da Unicamp não está disponível no site agora. " +
-				"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
+					"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
 			)
 			sendWhatsAppMessageTo(chatId, resposta)
 			return
@@ -417,6 +417,24 @@ func configurarInstancia() {
 }
 
 // ================= MAIN =================
+func selfPing(port string) {
+	// Espera 1 minuto para o servidor subir antes de começar
+	time.Sleep(1 * time.Minute)
+
+	url := fmt.Sprintf("http://localhost:%s/", port)
+	log.Println("Iniciando self-ping a cada 10 minutos para:", url)
+
+	for {
+		resp, err := http.Get(url)
+		if err != nil {
+			log.Println("Self-ping falhou:", err)
+		} else {
+			resp.Body.Close()
+			log.Println("Self-ping OK")
+		}
+		time.Sleep(10 * time.Minute)
+	}
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -427,12 +445,13 @@ func main() {
 
 	log.Println("Bot RU Unicamp iniciado!")
 
-	go startPolling()
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+
+	go startPolling()
+	go selfPing(port) // ← self-ping em goroutine paralela
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
