@@ -23,7 +23,7 @@ const (
 	HARDCODED_OPENROUTER_KEY = ""
 	API_URL                  = "https://api.green-api.com"
 	OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
-	OPENROUTER_MODEL         = "mistralai/mistral-7b-instruct:free" // modelo gratuito
+	OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
 )
 
 func getEnv(key, hardcoded string) string {
@@ -443,7 +443,6 @@ func main() {
 	}
 
 	configurarInstancia()
-	log.Println(perguntarOpenRouter("vai porra"))
 	log.Println("Bot RU Unicamp iniciado!")
 
 	port := os.Getenv("PORT")
@@ -452,6 +451,7 @@ func main() {
 	}
 
 	go startPolling()
+	log.Println(perguntarOpenRouter("vai porra"))
 	go selfPing(port) // ← self-ping em goroutine paralela
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
