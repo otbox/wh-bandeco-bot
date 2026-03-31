@@ -137,8 +137,8 @@ func buscarSemana() ([]*CardapioDia, error) {
 }
 
 func resumir(texto string) string {
-	if len(texto) > 120 {
-		return texto[:120] + "..."
+	if len(texto) > 300 {
+		return texto[:300] + "..."
 	}
 	return texto
 }
@@ -194,7 +194,7 @@ func perguntarOpenRouter(pergunta string) string {
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias em português.",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias, qualquer coisa não relacionada ao bandeco ou ao restaurante universitário em português. Caso seje algo do bandeco seje hiper caloroso e fofo, com amor.",
 			},
 			{
 				"role":    "user",
