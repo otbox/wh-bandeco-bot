@@ -22,8 +22,12 @@ const (
 	HARDCODED_CHAT           = ""
 	HARDCODED_OPENROUTER_KEY = ""
 	API_URL                  = "https://api.green-api.com"
-	OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
-	OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
+	// OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
+	OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
+	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
+	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
+	OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
 )
 
 func getEnv(key, hardcoded string) string {
@@ -194,7 +198,7 @@ func perguntarOpenRouter(pergunta string) string {
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias, qualquer coisa não relacionada ao bandeco ou ao restaurante universitário em português. Caso seje algo do bandeco seje hiper caloroso e fofo, com amor.",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias, qualquer coisa não relacionada ao bandeco ou ao restaurante universitário em português. Caso seje algo do bandeco seje hiper caloroso e fofo.",
 			},
 			{
 				"role":    "user",
