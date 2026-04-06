@@ -367,7 +367,7 @@ func perguntarOpenRouter(pergunta string) string {
 	choices, ok := result["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
 		log.Println("OpenRouter sem choices:", result)
-		return "Não obtive resposta da IA."
+		return "Cansei, não irei mais responder perguntas, apenas comandos."
 	}
 
 	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
