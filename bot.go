@@ -152,10 +152,16 @@ func formatarSemana(semana []*CardapioDia) string {
 	msg.WriteString("📅 Cardápio da Semana\n\n")
 	for _, dia := range semana {
 		msg.WriteString(fmt.Sprintf(
-			"📌 %s\n🍛 %s\n🥗 %s\n\n",
+			"📌 %s\n"+
+				"🍛 Almoço:\n%s\n\n"+
+				"🥗 Vegano:\n%s\n\n"+
+				"🍝 Jantar:\n%s\n\n"+
+				"🌱 Vegano Jantar:\n%s\n\n",
 			dia.Data,
 			resumir(dia.Almoco.Padrao),
 			resumir(dia.Almoco.Vegano),
+			resumir(dia.Jantar.Padrao),
+			resumir(dia.Jantar.Vegano),
 		))
 	}
 	return msg.String()
@@ -198,7 +204,7 @@ func perguntarOpenRouter(pergunta string) string {
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). Responda de forma curta e grossa, mal educada e cheia de girias, qualquer coisa não relacionada ao bandeco ou ao restaurante universitário em português. Caso seje algo do bandeco seje hiper caloroso e fofo.",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco) seje hiper caloroso e fofo.. Responda de forma curta e grossa, mal educada e cheia de girias, qualquer coisa não relacionada ao bandeco ou ao restaurante universitário em português.",
 			},
 			{
 				"role":    "user",
