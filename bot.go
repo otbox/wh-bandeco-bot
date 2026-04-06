@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -194,6 +195,38 @@ func formatarMensagem(cardapio *CardapioDia) string {
 // ================= OPENROUTER =================
 
 func perguntarOpenRouter(pergunta string) string {
+	pergunta = strings.ToLower(pergunta)
+
+	var re = regexp.MustCompile(`(?i)\b(bandeco|jantar|ru|cardapio|comida|restaurante universitario|almoco|almoço|janta)\b`)
+
+	if re.MatchString(pergunta) {
+
+		// ===== HOJE =====
+		if strings.Contains(pergunta, "hoje") {
+			cardapio, err := buscarCardapio(formatDate(time.Now()))
+
+			if err != nil || cardapio == nil || cardapio.Almoco.Padrao == "" {
+				pergunta += "\n\n[INFO]: Não foi possível obter o cardápio de hoje."
+			} else {
+				info := formatarMensagem(cardapio)
+				pergunta += "\n\n[INFO CARDÁPIO HOJE]:\n" + info
+			}
+		}
+
+		// ===== SEMANAL =====
+		if strings.Contains(pergunta, "semana") || strings.Contains(pergunta, "semanal") {
+			semana, err := buscarSemana()
+
+			if err != nil || len(semana) == 0 {
+				pergunta += "\n\n[INFO]: Não foi possível obter o cardápio da semana."
+			} else {
+				info := formatarSemana(semana)
+				pergunta += "\n\n[INFO CARDÁPIO SEMANAL]:\n" + info
+			}
+		}
+	}
+
+	// ===== OPENROUTER =====
 	key := getOpenRouterKey()
 	if key == "" {
 		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
@@ -203,8 +236,10 @@ func perguntarOpenRouter(pergunta string) string {
 		"model": OPENROUTER_MODEL,
 		"messages": []map[string]string{
 			{
-				"role":    "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco) seje hiper caloroso e fofo.. Responda de forma curta e grossa, mal educada e cheia de girias, qualquer coisa não relacionada ao bandeco ou ao restaurante universitário em português.",
+				"role": "system",
+				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). " +
+					"Se for assunto do RU, seja hiper caloroso e fofo. " +
+					"Caso contrário, responda de forma curta, grossa e cheia de gírias.",
 			},
 			{
 				"role":    "user",
@@ -214,6 +249,7 @@ func perguntarOpenRouter(pergunta string) string {
 	}
 
 	jsonData, _ := json.Marshal(payload)
+
 	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Println("Erro ao criar request OpenRouter:", err)
