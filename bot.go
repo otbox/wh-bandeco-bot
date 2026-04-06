@@ -27,11 +27,11 @@ const (
 	OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
 	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
-	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
-	OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
+	OPENROUTER_MODEL = "arcee-ai/trinity-mini:free" // modelo gratuito
+	// OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
 )
 
-var chatsPermitidos = getAllowedChats()
+var chatsPermitidos map[string]bool
 
 func getEnv(key, hardcoded string) string {
 	if hardcoded != "" {
@@ -215,8 +215,55 @@ func formatarMensagem(cardapio *CardapioDia) string {
 
 // ================= OPENROUTER =================
 
-func perguntarOpenRouter(pergunta string) string {
+var diasSemana = map[string]time.Weekday{
+	"domingo": time.Sunday,
+	"segunda": time.Monday,
+	"terça":   time.Tuesday,
+	"terca":   time.Tuesday,
+	"quarta":  time.Wednesday,
+	"quinta":  time.Thursday,
+	"sexta":   time.Friday,
+	"sábado":  time.Saturday,
+	"sabado":  time.Saturday,
+}
+
+func extrairDiaSemana(pergunta string) (time.Weekday, bool) {
 	pergunta = strings.ToLower(pergunta)
+
+	// ===== AMANHÃ =====
+	if strings.Contains(pergunta, "amanhã") || strings.Contains(pergunta, "amanha") {
+		return time.Now().AddDate(0, 0, 1).Weekday(), true
+	}
+
+	// ===== DIAS DA SEMANA =====
+	for nome, dia := range diasSemana {
+		if strings.Contains(pergunta, nome) {
+			return dia, true
+		}
+	}
+
+	return 0, false
+}
+
+func proximoDia(target time.Weekday) time.Time {
+	hoje := time.Now()
+	diff := int(target - hoje.Weekday())
+
+	if diff < 0 {
+		diff += 7
+	}
+
+	return hoje.AddDate(0, 0, diff)
+}
+
+func tipoRefeicao(pergunta string) string {
+	if strings.Contains(pergunta, "jantar") || strings.Contains(pergunta, "janta") {
+		return "jantar"
+	}
+	return "almoco"
+}
+
+func perguntarOpenRouter(pergunta string) string {
 
 	var re = regexp.MustCompile(`(?i)\b(bandeco|jantar|ru|cardapio|comida|restaurante universitario|almoco|almoço|janta)\b`)
 
@@ -232,10 +279,7 @@ func perguntarOpenRouter(pergunta string) string {
 				info := formatarMensagem(cardapio)
 				pergunta += "\n\n[INFO CARDÁPIO HOJE]:\n" + info
 			}
-		}
-
-		// ===== SEMANAL =====
-		if strings.Contains(pergunta, "semana") || strings.Contains(pergunta, "semanal") {
+		} else if strings.Contains(pergunta, "semana") || strings.Contains(pergunta, "semanal") {
 			semana, err := buscarSemana()
 
 			if err != nil || len(semana) == 0 {
@@ -243,6 +287,33 @@ func perguntarOpenRouter(pergunta string) string {
 			} else {
 				info := formatarSemana(semana)
 				pergunta += "\n\n[INFO CARDÁPIO SEMANAL]:\n" + info
+			}
+		} else if dia, ok := extrairDiaSemana(pergunta); ok {
+
+			data := proximoDia(dia)
+			cardapio, err := buscarCardapio(formatDate(data))
+
+			if err != nil || cardapio == nil {
+				pergunta += "\n\n[INFO]: Não foi possível obter o cardápio desse dia."
+			} else {
+
+				tipo := tipoRefeicao(pergunta)
+
+				if tipo == "jantar" {
+					pergunta += fmt.Sprintf(
+						"\n\n[INFO CARDÁPIO %s - JANTAR]:\n%s\n\nVegano:\n%s",
+						cardapio.Data,
+						cardapio.Jantar.Padrao,
+						cardapio.Jantar.Vegano,
+					)
+				} else {
+					pergunta += fmt.Sprintf(
+						"\n\n[INFO CARDÁPIO %s - ALMOÇO]:\n%s\n\nVegano:\n%s",
+						cardapio.Data,
+						cardapio.Almoco.Padrao,
+						cardapio.Almoco.Vegano,
+					)
+				}
 			}
 		}
 	}
@@ -314,7 +385,12 @@ func sendWhatsAppMessageTo(chatId, message string) {
 
 	payload := map[string]string{"chatId": chatId, "message": message}
 	jsonData, _ := json.Marshal(payload)
-	http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Println("Erro ao enviar mensagem:", err)
+		return
+	}
+	defer resp.Body.Close()
 }
 
 func sendWhatsAppMessage(message string) {
@@ -372,6 +448,8 @@ func processarNotificacao(notif *Notification) {
 	body := notif.Body
 
 	typeWebhook, _ := body["typeWebhook"].(string)
+	// jsonPretty, _ := json.MarshalIndent(notif.Body, "", "  ")
+	// log.Println("[DEBUG] BODY COMPLETO:\n", string(jsonPretty))
 	if typeWebhook != "incomingMessageReceived" {
 		log.Printf("Notificação ignorada: %s", typeWebhook)
 		return
@@ -383,7 +461,7 @@ func processarNotificacao(notif *Notification) {
 	}
 	chatId, _ := senderData["chatId"].(string)
 
-	if !chatsPermitidos[chatId] {
+	if len(chatsPermitidos) > 0 && !chatsPermitidos[chatId] {
 		log.Println("Chat não autorizado:", chatId)
 		return
 	}
@@ -398,7 +476,11 @@ func processarNotificacao(notif *Notification) {
 		return
 	}
 
-	text := strings.ToLower(strings.TrimSpace(textData["textMessage"].(string)))
+	msg, ok := textData["textMessage"].(string)
+	if !ok {
+		return
+	}
+	text := strings.ToLower(strings.TrimSpace(msg))
 	log.Printf("Mensagem recebida de %s: %s", chatId, text)
 
 	switch {
@@ -438,12 +520,44 @@ func processarNotificacao(notif *Notification) {
 	default:
 		// Qualquer outra mensagem que não seja comando vai para o OpenRouter
 		if strings.HasPrefix(text, "/ru ") {
-			campos := strings.Fields(text)
-			if len(campos) > 0 && campos[0] == "/ru" {
-				resposta := perguntarOpenRouter(text)
-				sendWhatsAppMessageTo(chatId, resposta)
+
+			// ===== DIA DA SEMANA =====
+			if dia, ok := extrairDiaSemana(text); ok {
+
+				data := proximoDia(dia)
+				cardapio, err := buscarCardapio(formatDate(data))
+
+				if err != nil || cardapio == nil {
+					sendWhatsAppMessageTo(chatId, "Não consegui obter o cardápio desse dia.")
+					return
+				}
+
+				tipo := tipoRefeicao(text)
+
+				if tipo == "jantar" {
+					sendWhatsAppMessageTo(chatId, fmt.Sprintf(
+						"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
+						cardapio.Data,
+						cardapio.Jantar.Padrao,
+						cardapio.Jantar.Vegano,
+					))
+					return
+				}
+
+				sendWhatsAppMessageTo(chatId, fmt.Sprintf(
+					"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+					cardapio.Data,
+					cardapio.Almoco.Padrao,
+					cardapio.Almoco.Vegano,
+				))
+				return
 			}
+
+			// ===== FALLBACK IA =====
+			resposta := perguntarOpenRouter(text)
+			sendWhatsAppMessageTo(chatId, resposta)
 		}
+
 	}
 }
 
@@ -457,8 +571,11 @@ func startPolling() {
 			continue
 		}
 		if notif == nil {
+			time.Sleep(2 * time.Second) // <-- ESSENCIAL
 			continue
 		}
+
+		time.Sleep(1 * time.Second)
 		processarNotificacao(notif)
 		if err := deleteNotification(notif.ReceiptId); err != nil {
 			log.Println("Erro ao deletar notificação:", notif.ReceiptId, err)
@@ -516,7 +633,7 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Arquivo .env não encontrado, usando variáveis de ambiente do sistema")
 	}
-
+	chatsPermitidos = getAllowedChats()
 	configurarInstancia()
 	log.Println("Bot RU Unicamp iniciado!")
 
