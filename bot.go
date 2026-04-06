@@ -31,11 +31,32 @@ const (
 	OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
 )
 
+var chatsPermitidos = getAllowedChats()
+
 func getEnv(key, hardcoded string) string {
 	if hardcoded != "" {
 		return hardcoded
 	}
 	return os.Getenv(key)
+}
+
+func getAllowedChats() map[string]bool {
+	permitidos := make(map[string]bool)
+
+	raw := os.Getenv("ALLOWED_CHATS")
+	if raw == "" {
+		log.Println("WARN: ALLOWED_CHATS vazio — nenhum chat permitido")
+		return permitidos
+	}
+
+	for _, c := range strings.Split(raw, ",") {
+		c = strings.TrimSpace(c)
+		if c != "" {
+			permitidos[c] = true
+		}
+	}
+
+	return permitidos
 }
 
 func getInstance() string      { return getEnv("GREEN_API_INSTANCE", HARDCODED_INSTANCE) }
@@ -362,6 +383,11 @@ func processarNotificacao(notif *Notification) {
 	}
 	chatId, _ := senderData["chatId"].(string)
 
+	if !chatsPermitidos[chatId] {
+		log.Println("Chat não autorizado:", chatId)
+		return
+	}
+
 	messageData, ok := body["messageData"].(map[string]interface{})
 	if !ok {
 		return
@@ -472,7 +498,7 @@ func selfPing(port string) {
 
 	// url := fmt.Sprintf("http://localhost:%s/", port)
 	url := fmt.Sprintf("https://wh-bandeco-bot.onrender.com/")
-	log.Println("Iniciando self-ping a cada 10 minutos para:", url)
+	// log.Println("Iniciando self-ping a cada 10 minutos para:", url)
 
 	for {
 		resp, err := http.Get(url)
