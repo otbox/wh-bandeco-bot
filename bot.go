@@ -265,57 +265,62 @@ func tipoRefeicao(pergunta string) string {
 
 func perguntarOpenRouter(pergunta string) string {
 
-	var re = regexp.MustCompile(`(?i)\b(bandeco|jantar|ru|cardapio|comida|restaurante universitario|almoco|almoço|janta)\b`)
+	var reCmd = regexp.MustCompile(`(?i)^/ru\s+(\w+)\s+(almoco|almoço|janta|jantar)$`)
 
-	if re.MatchString(pergunta) {
+	if matches := reCmd.FindStringSubmatch(pergunta); len(matches) == 3 {
+
+		dataStr := strings.ToLower(matches[1])
+		refeicao := strings.ToLower(matches[2])
+
+		var data time.Time
 
 		// ===== HOJE =====
-		if strings.Contains(pergunta, "hoje") {
-			cardapio, err := buscarCardapio(formatDate(time.Now()))
+		if dataStr == "hoje" {
+			data = time.Now()
 
-			if err != nil || cardapio == nil || cardapio.Almoco.Padrao == "" {
-				pergunta += "\n\n[INFO]: Não foi possível obter o cardápio de hoje."
-			} else {
-				info := formatarMensagem(cardapio)
-				pergunta += "\n\n[INFO CARDÁPIO HOJE]:\n" + info
-			}
-		} else if strings.Contains(pergunta, "semana") || strings.Contains(pergunta, "semanal") {
-			semana, err := buscarSemana()
+			// ===== AMANHÃ =====
+		} else if dataStr == "amanha" || dataStr == "amanhã" {
+			data = time.Now().AddDate(0, 0, 1)
 
-			if err != nil || len(semana) == 0 {
-				pergunta += "\n\n[INFO]: Não foi possível obter o cardápio da semana."
-			} else {
-				info := formatarSemana(semana)
-				pergunta += "\n\n[INFO CARDÁPIO SEMANAL]:\n" + info
-			}
-		} else if dia, ok := extrairDiaSemana(pergunta); ok {
+			// ===== DIA DA SEMANA =====
+		} else if dia, ok := diasSemana[dataStr]; ok {
+			data = proximoDia(dia)
 
-			data := proximoDia(dia)
-			cardapio, err := buscarCardapio(formatDate(data))
-
-			if err != nil || cardapio == nil {
-				pergunta += "\n\n[INFO]: Não foi possível obter o cardápio desse dia."
-			} else {
-
-				tipo := tipoRefeicao(pergunta)
-
-				if tipo == "jantar" {
-					pergunta += fmt.Sprintf(
-						"\n\n[INFO CARDÁPIO %s - JANTAR]:\n%s\n\nVegano:\n%s",
-						cardapio.Data,
-						cardapio.Jantar.Padrao,
-						cardapio.Jantar.Vegano,
-					)
-				} else {
-					pergunta += fmt.Sprintf(
-						"\n\n[INFO CARDÁPIO %s - ALMOÇO]:\n%s\n\nVegano:\n%s",
-						cardapio.Data,
-						cardapio.Almoco.Padrao,
-						cardapio.Almoco.Vegano,
-					)
-				}
-			}
+		} else {
+			return "Formato inválido. Use: /ru hoje almoço | /ru terça jantar"
 		}
+
+		cardapio, err := buscarCardapio(formatDate(data))
+		if err != nil || cardapio == nil {
+			return "Não consegui obter o cardápio."
+		}
+
+		// ===== RESPOSTA DIRETA =====
+		if refeicao == "janta" || refeicao == "jantar" {
+			return fmt.Sprintf(
+				"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
+				cardapio.Data,
+				cardapio.Jantar.Padrao,
+				cardapio.Jantar.Vegano,
+			)
+		}
+		if refeicao == "almoço" || refeicao == "almoco" {
+			return fmt.Sprintf(
+				"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+				cardapio.Data,
+				cardapio.Almoco.Padrao,
+				cardapio.Almoco.Vegano,
+			)
+		}
+
+		return fmt.Sprintf(
+			"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+			cardapio.Data,
+			cardapio.Almoco.Padrao,
+			cardapio.Almoco.Vegano,
+			cardapio.Jantar.Padrao,
+			cardapio.Jantar.Vegano,
+		)
 	}
 
 	// ===== OPENROUTER =====
