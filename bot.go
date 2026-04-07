@@ -314,7 +314,10 @@ func perguntarOpenRouter(pergunta string) string {
 		}
 
 		return fmt.Sprintf(
-			"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+			"🍛 Almoço de %s:\n%s\n\n"+
+				"🥗 Vegano:\n%s\n\n"+
+				"🍝 Jantar:\n%s\n\n"+
+				"🌱 Vegano Jantar:\n%s\n\n",
 			cardapio.Data,
 			cardapio.Almoco.Padrao,
 			cardapio.Almoco.Vegano,
