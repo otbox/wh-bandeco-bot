@@ -454,54 +454,68 @@ func deleteNotification(receiptId int) error {
 	return nil
 }
 
+func extrairTexto(messageData map[string]interface{}) string {
+	if t, ok := messageData["textMessageData"].(map[string]interface{}); ok {
+		if msg, ok := t["textMessage"].(string); ok {
+			return msg
+		}
+	}
+
+	if t, ok := messageData["extendedTextMessageData"].(map[string]interface{}); ok {
+		if msg, ok := t["text"].(string); ok {
+			return msg
+		}
+	}
+
+	return ""
+}
+
 func processarNotificacao(notif *Notification) {
 	body := notif.Body
 
 	typeWebhook, _ := body["typeWebhook"].(string)
-	// jsonPretty, _ := json.MarshalIndent(notif.Body, "", "  ")
-	// log.Println("[DEBUG] BODY COMPLETO:\n", string(jsonPretty))
+
+	jsonPretty, _ := json.MarshalIndent(body, "", "  ")
+	log.Println("[DEBUG] BODY COMPLETO:\n", string(jsonPretty))
+
 	if typeWebhook != "incomingMessageReceived" {
 		log.Printf("Notificação ignorada: %s", typeWebhook)
 		return
 	}
 
+	// ===== sender =====
 	senderData, ok := body["senderData"].(map[string]interface{})
 	if !ok {
 		return
 	}
+
 	chatId, _ := senderData["chatId"].(string)
 
-	if len(chatsPermitidos) > 0 && !chatsPermitidos[chatId] {
-		log.Println("Chat não autorizado:", chatId)
-		return
-	}
-
+	// ===== messageData =====
 	messageData, ok := body["messageData"].(map[string]interface{})
 	if !ok {
 		return
 	}
 
-	textData, ok := messageData["textMessageData"].(map[string]interface{})
-	if !ok {
+	// ===== EXTRAÇÃO CORRETA =====
+	msg := extrairTexto(messageData)
+
+	if msg == "" {
+		log.Println("Mensagem vazia ou tipo não suportado")
 		return
 	}
 
-	msg, ok := textData["textMessage"].(string)
-	if !ok {
-		return
-	}
 	text := strings.ToLower(strings.TrimSpace(msg))
+
 	log.Printf("Mensagem recebida de %s: %s", chatId, text)
+
+	// ===================== COMANDOS =====================
 
 	switch {
 	case strings.Contains(text, "/ru hoje"):
 		cardapio, err := buscarCardapio(formatDate(time.Now()))
 		if err != nil || cardapio.Almoco.Padrao == "" {
-			log.Println("Cardápio hoje indisponível, consultando OpenRouter...")
-			resposta := perguntarOpenRouter(
-				"O cardápio do RU da Unicamp de hoje não está disponível no site. " +
-					"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
-			)
+			resposta := perguntarOpenRouter("Cardápio indisponível hoje.")
 			sendWhatsAppMessageTo(chatId, resposta)
 			return
 		}
@@ -510,11 +524,7 @@ func processarNotificacao(notif *Notification) {
 	case strings.Contains(text, "/ru semanal"):
 		semana, _ := buscarSemana()
 		if len(semana) == 0 {
-			log.Println("Cardápio semanal indisponível, consultando OpenRouter...")
-			resposta := perguntarOpenRouter(
-				"O cardápio semanal do RU da Unicamp não está disponível no site agora. " +
-					"Avise o usuário de forma simpática e sugira que ele acesse https://www.prefeitura.unicamp.br/servicos/restaurantes-universitarios/ para verificar.",
-			)
+			resposta := perguntarOpenRouter("Cardápio semanal indisponível.")
 			sendWhatsAppMessageTo(chatId, resposta)
 			return
 		}
@@ -523,12 +533,12 @@ func processarNotificacao(notif *Notification) {
 	case strings.Contains(text, "/ru ajuda"):
 		sendWhatsAppMessageTo(chatId,
 			"🤖 Comandos disponíveis:\n\n"+
-				"/ru hoje — cardápio do dia\n"+
-				"/ru semanal — cardápio da semana",
+				"/ru hoje\n"+
+				"/ru semanal\n"+
+				"/ru [dia] [almoço|jantar]",
 		)
 
 	default:
-		// Qualquer outra mensagem que não seja comando vai para o OpenRouter
 		if strings.HasPrefix(text, "/ru ") {
 
 			// ===== DIA DA SEMANA =====
@@ -564,17 +574,7 @@ func processarNotificacao(notif *Notification) {
 					return
 				}
 
-				sendWhatsAppMessageTo(chatId, fmt.Sprintf(
-					"🍛 Almoço de %s:\n%s\n\n"+
-						"🥗 Vegano:\n%s\n\n"+
-						"🍝 Jantar:\n%s\n\n"+
-						"🌱 Vegano Jantar:\n%s\n\n",
-					cardapio.Data,
-					cardapio.Almoco.Padrao,
-					cardapio.Almoco.Vegano,
-					cardapio.Jantar.Padrao,
-					cardapio.Jantar.Vegano,
-				))
+				sendWhatsAppMessageTo(chatId, formatarMensagem(cardapio))
 				return
 			}
 
@@ -582,7 +582,6 @@ func processarNotificacao(notif *Notification) {
 			resposta := perguntarOpenRouter(text)
 			sendWhatsAppMessageTo(chatId, resposta)
 		}
-
 	}
 }
 
