@@ -259,8 +259,10 @@ func proximoDia(target time.Weekday) time.Time {
 func tipoRefeicao(pergunta string) string {
 	if strings.Contains(pergunta, "jantar") || strings.Contains(pergunta, "janta") {
 		return "jantar"
+	} else if strings.Contains(pergunta, "jantar") || strings.Contains(pergunta, "janta") {
+		return "almoco"
 	}
-	return "almoco"
+	return "nenhum"
 }
 
 func perguntarOpenRouter(pergunta string) string {
