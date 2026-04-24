@@ -25,11 +25,14 @@ const (
 	API_URL                  = "https://api.green-api.com"
 	// OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
 	OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
-	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
-	OPENROUTER_MODEL = "liquid/lfm-2.5-1.2b-instruct:free" // modelo gratuito
 	// OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
 )
+
+var OPENROUTER_MODELS = []string{
+	"google/gemma-3n-e4b-it:free",
+	"minimax/minimax-m2.5:free",
+	"baidu/qianfan-ocr-fast:free",
+}
 
 var chatsPermitidos map[string]bool
 
@@ -227,6 +230,83 @@ var diasSemana = map[string]time.Weekday{
 	"sabado":  time.Saturday,
 }
 
+type RuCommand struct {
+	RawDate  string
+	Refeicao string
+}
+
+// var reRuEstrito = regexp.MustCompile(`(?i)^/ru\s+(hoje|amanhã|amanha|domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)\s+(almoco|almoço|janta|jantar)$`)
+var reRuEstrito = regexp.MustCompile(`(?i)^/ru\s+(hoje|amanhã|amanha|domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)(?:\s+(almoco|almoço|janta|jantar))?$`)
+func parseRuCommand(text string) (*RuCommand, bool) {
+    text = strings.TrimSpace(strings.ToLower(text))
+    m := reRuEstrito.FindStringSubmatch(text)
+    if len(m) != 3 {
+        return nil, false
+    }
+
+    refeicao := strings.TrimSpace(m[2])
+    if refeicao == "janta" {
+        refeicao = "jantar"
+    }
+    if refeicao == "almoço" {
+        refeicao = "almoco"
+    }
+
+    return &RuCommand{
+        RawDate:  m[1],
+        Refeicao: refeicao,
+    }, true
+}
+
+func resolverData(raw string) (time.Time, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+
+	switch raw {
+	case "hoje":
+		return time.Now(), nil
+	case "amanhã", "amanha":
+		return time.Now().AddDate(0, 0, 1), nil
+	}
+
+	dia, ok := diasSemana[raw]
+	if !ok {
+		return time.Time{}, fmt.Errorf("dia inválido")
+	}
+
+	return proximoDia(dia), nil
+}
+
+func responderComandoRu(cmd *RuCommand) string {
+	data, err := resolverData(cmd.RawDate)
+	if err != nil {
+		return "Formato inválido. Use: /ru hoje almoço | /ru terça jantar"
+	}
+
+	cardapio, err := buscarCardapio(formatDate(data))
+	if err != nil || cardapio == nil {
+		return "Não consegui obter o cardápio."
+	}
+
+	switch cmd.Refeicao {
+	case "jantar":
+		return fmt.Sprintf(
+			"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
+			cardapio.Data,
+			cardapio.Jantar.Padrao,
+			cardapio.Jantar.Vegano,
+		)
+	case "almoco":
+		return fmt.Sprintf(
+			"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+			cardapio.Data,
+			cardapio.Almoco.Padrao,
+			cardapio.Almoco.Vegano,
+		)
+	default:
+		return formatarMensagem(cardapio)
+	}
+}
+
 func extrairDiaSemana(pergunta string) (time.Weekday, bool) {
 	pergunta = strings.ToLower(pergunta)
 
@@ -265,91 +345,55 @@ func tipoRefeicao(pergunta string) string {
 	return "nenhum"
 }
 
-func perguntarOpenRouter(pergunta string) string {
+func montarContextoCardapio(pergunta string) string {
+	var partes []string
 
-	var reCmd = regexp.MustCompile(`(?i)^/ru\s+(\w+)\s+(almoco|almoço|janta|jantar)$`)
-
-	if matches := reCmd.FindStringSubmatch(pergunta); len(matches) == 3 {
-
-		dataStr := strings.ToLower(matches[1])
-		refeicao := strings.ToLower(matches[2])
-
-		var data time.Time
-
-		// ===== HOJE =====
-		if dataStr == "hoje" {
-			data = time.Now()
-
-			// ===== AMANHÃ =====
-		} else if dataStr == "amanha" || dataStr == "amanhã" {
-			data = time.Now().AddDate(0, 0, 1)
-
-			// ===== DIA DA SEMANA =====
-		} else if dia, ok := diasSemana[dataStr]; ok {
-			data = proximoDia(dia)
-
-		} else {
-			return "Formato inválido. Use: /ru hoje almoço | /ru terça jantar"
-		}
-
-		cardapio, err := buscarCardapio(formatDate(data))
-		if err != nil || cardapio == nil {
-			return "Não consegui obter o cardápio."
-		}
-
-		// ===== RESPOSTA DIRETA =====
-		if refeicao == "janta" || refeicao == "jantar" {
-			return fmt.Sprintf(
-				"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
-				cardapio.Data,
-				cardapio.Jantar.Padrao,
-				cardapio.Jantar.Vegano,
-			)
-		}
-		if refeicao == "almoço" || refeicao == "almoco" {
-			return fmt.Sprintf(
-				"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
-				cardapio.Data,
-				cardapio.Almoco.Padrao,
-				cardapio.Almoco.Vegano,
-			)
-		}
-
-		return fmt.Sprintf(
-			"🍛 Almoço de %s:\n%s\n\n"+
-				"🥗 Vegano:\n%s\n\n"+
-				"🍝 Jantar:\n%s\n\n"+
-				"🌱 Vegano Jantar:\n%s\n\n",
-			cardapio.Data,
-			cardapio.Almoco.Padrao,
-			cardapio.Almoco.Vegano,
-			cardapio.Jantar.Padrao,
-			cardapio.Jantar.Vegano,
-		)
+	hoje, err := buscarCardapio(formatDate(time.Now()))
+	if err == nil && hoje != nil {
+		partes = append(partes, "CARDÁPIO DE HOJE:\n"+formatarMensagem(hoje))
 	}
 
-	// ===== OPENROUTER =====
+	if dia, ok := extrairDiaSemana(pergunta); ok {
+		alvo, err := buscarCardapio(formatDate(proximoDia(dia)))
+		if err == nil && alvo != nil {
+			partes = append(partes, "CARDÁPIO DO DIA MENCIONADO:\n"+formatarMensagem(alvo))
+		}
+	}
+
+	if len(partes) == 0 {
+		return "Sem cardápio disponível no momento."
+	}
+
+	return strings.Join(partes, "\n\n")
+}
+
+func perguntarOpenRouter(pergunta string) string {
 	key := getOpenRouterKey()
 	if key == "" {
 		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
 	}
 
+	const prompt = `Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco).
+
+Regras:
+- Formate a mensagem para ser legível e utilizando emojis
+- Se a pergunta for sobre o RU/Bandeco, responda de forma calorosa, fofa e acolhedora.
+- Use somente o contexto de cardápio fornecido quando houver.
+- Se o contexto não trouxer a informação pedida, diga isso claramente.
+- Não invente informações.
+- Se a mensagem não for sobre RU, responda de forma curta, grossa e cheia de girias de minas gerais.`
+
+	contexto := montarContextoCardapio(pergunta)
+
 	payload := map[string]interface{}{
-		"model": OPENROUTER_MODEL,
+		"models": OPENROUTER_MODELS,
 		"messages": []map[string]string{
 			{
-				"role": "system",
-				"content": "Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco). " +
-					"Se for assunto do RU, seja hiper caloroso e fofo. " +
-					"Caso contrário, responda de forma curta, grossa e cheia de gírias.",
-			},
-			{
 				"role":    "user",
-				"content": pergunta,
+				"content": prompt + "\n\nCONTEXTO:\n" + contexto + "\n\nPERGUNTA DO USUÁRIO:\n" + pergunta,
 			},
 		},
 	}
-
 	jsonData, _ := json.Marshal(payload)
 
 	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
@@ -377,12 +421,152 @@ func perguntarOpenRouter(pergunta string) string {
 	choices, ok := result["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
 		log.Println("OpenRouter sem choices:", result)
-		return "Cansei, não irei mais responder perguntas, apenas comandos."
+		return "Não consegui responder agora."
 	}
 
 	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 	return msg["content"].(string)
 }
+
+// func perguntarOpenRouter(pergunta string) string {
+
+// 	var reCmd = regexp.MustCompile(`(?i)^/ru\s+(\w+)\s+(almoco|almoço|janta|jantar)$`)
+
+// 	if matches := reCmd.FindStringSubmatch(pergunta); len(matches) == 3 {
+
+// 		dataStr := strings.ToLower(matches[1])
+// 		refeicao := strings.ToLower(matches[2])
+
+// 		var data time.Time
+
+// 		// ===== HOJE =====
+// 		if dataStr == "hoje" {
+// 			data = time.Now()
+
+// 			// ===== AMANHÃ =====
+// 		} else if dataStr == "amanha" || dataStr == "amanhã" {
+// 			data = time.Now().AddDate(0, 0, 1)
+
+// 			// ===== DIA DA SEMANA =====
+// 		} else if dia, ok := diasSemana[dataStr]; ok {
+// 			data = proximoDia(dia)
+
+// 		} else {
+// 			return "Formato inválido. Use: /ru hoje almoço | /ru terça jantar"
+// 		}
+
+// 		cardapio, err := buscarCardapio(formatDate(data))
+// 		if err != nil || cardapio == nil {
+// 			return "Não consegui obter o cardápio."
+// 		}
+
+// 		// ===== RESPOSTA DIRETA =====
+// 		if refeicao == "janta" || refeicao == "jantar" {
+// 			return fmt.Sprintf(
+// 				"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
+// 				cardapio.Data,
+// 				cardapio.Jantar.Padrao,
+// 				cardapio.Jantar.Vegano,
+// 			)
+// 		}
+// 		if refeicao == "almoço" || refeicao == "almoco" {
+// 			return fmt.Sprintf(
+// 				"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+// 				cardapio.Data,
+// 				cardapio.Almoco.Padrao,
+// 				cardapio.Almoco.Vegano,
+// 			)
+// 		}
+
+// 		return fmt.Sprintf(
+// 			"🍛 Almoço de %s:\n%s\n\n"+
+// 				"🥗 Vegano:\n%s\n\n"+
+// 				"🍝 Jantar:\n%s\n\n"+
+// 				"🌱 Vegano Jantar:\n%s\n\n",
+// 			cardapio.Data,
+// 			cardapio.Almoco.Padrao,
+// 			cardapio.Almoco.Vegano,
+// 			cardapio.Jantar.Padrao,
+// 			cardapio.Jantar.Vegano,
+// 		)
+// 	}
+
+// 	// ===== OPENROUTER =====
+// 	key := getOpenRouterKey()
+// 	if key == "" {
+// 		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
+// 	}
+
+// 	const prompt = `Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco).
+// 	Sua função é responder apenas o necessário, com foco em utilidade e concisão.
+
+// Regras de tom:
+
+// Se a pergunta for sobre o RU/Bandeco, responda com tom muito caloroso, fofo e acolhedor, utilizando de emojis e afins.
+
+// Se a pergunta não for sobre o RU/Bandeco, responda de forma curta, direta, com gírias, com grosseria e com sarcasmo.
+
+// Regras de resposta:
+
+// Não explique regras internas.
+
+// Não faça introduções longas.
+
+// Não invente informações.
+
+// Se faltar contexto, faça uma pergunta objetiva.
+
+// Priorize a resposta mais curta que ainda seja correta.
+
+// Objetivo: ser útil no mínimo de palavras possível.`
+
+// 	payload := map[string]interface{}{
+// 		"model": OPENROUTER_MODEL,
+// 		"messages": []map[string]string{
+// 			{
+// 				"role":    "system",
+// 				"content": prompt,
+// 			},
+// 			{
+// 				"role":    "user",
+// 				"content": pergunta,
+// 			},
+// 		},
+// 	}
+
+// 	jsonData, _ := json.Marshal(payload)
+
+// 	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
+// 	if err != nil {
+// 		log.Println("Erro ao criar request OpenRouter:", err)
+// 		return "Erro ao consultar IA."
+// 	}
+
+// 	req.Header.Set("Content-Type", "application/json")
+// 	req.Header.Set("Authorization", "Bearer "+key)
+// 	req.Header.Set("HTTP-Referer", "https://github.com/ru-bot")
+
+// 	resp, err := http.DefaultClient.Do(req)
+// 	if err != nil {
+// 		log.Println("Erro ao chamar OpenRouter:", err)
+// 		return "Erro ao consultar IA."
+// 	}
+// 	defer resp.Body.Close()
+
+// 	var result map[string]interface{}
+// 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+// 		return "Erro ao processar resposta da IA."
+// 	}
+
+// 	choices, ok := result["choices"].([]interface{})
+// 	if !ok || len(choices) == 0 {
+// 		log.Println("OpenRouter sem choices:", result)
+// 		return "Cansei, não irei mais responder perguntas, apenas comandos."
+// 	}
+
+// 	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+// 	return msg["content"].(string)
+// }
 
 // ================= WHATSAPP =================
 
@@ -539,48 +723,15 @@ func processarNotificacao(notif *Notification) {
 		)
 
 	default:
-		if strings.HasPrefix(text, "/ru ") {
-
-			// ===== DIA DA SEMANA =====
-			if dia, ok := extrairDiaSemana(text); ok {
-
-				data := proximoDia(dia)
-				cardapio, err := buscarCardapio(formatDate(data))
-
-				if err != nil || cardapio == nil {
-					sendWhatsAppMessageTo(chatId, "Não consegui obter o cardápio desse dia.")
-					return
-				}
-
-				tipo := tipoRefeicao(text)
-
-				if tipo == "jantar" {
-					sendWhatsAppMessageTo(chatId, fmt.Sprintf(
-						"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
-						cardapio.Data,
-						cardapio.Jantar.Padrao,
-						cardapio.Jantar.Vegano,
-					))
-					return
-				}
-
-				if tipo == "almoco" {
-					sendWhatsAppMessageTo(chatId, fmt.Sprintf(
-						"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
-						cardapio.Data,
-						cardapio.Almoco.Padrao,
-						cardapio.Almoco.Vegano,
-					))
-					return
-				}
-
-				sendWhatsAppMessageTo(chatId, formatarMensagem(cardapio))
+		if strings.HasPrefix(text, "/ru") {
+			if cmd, ok := parseRuCommand(text); ok {
+				sendWhatsAppMessageTo(chatId, responderComandoRu(cmd))
 				return
 			}
 
-			// ===== FALLBACK IA =====
 			resposta := perguntarOpenRouter(text)
 			sendWhatsAppMessageTo(chatId, resposta)
+			return
 		}
 	}
 }
