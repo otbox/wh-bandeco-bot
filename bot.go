@@ -27,7 +27,7 @@ const (
 	OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
 	// OPENROUTER_MODEL         = "arcee-ai/trinity-mini:free" // modelo gratuito
-	OPENROUTER_MODEL = "arcee-ai/trinity-mini:free" // modelo gratuito
+	OPENROUTER_MODEL = "liquid/lfm-2.5-1.2b-instruct:free" // modelo gratuito
 	// OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
 )
 
