@@ -22,16 +22,25 @@ const (
 	HARDCODED_TOKEN          = ""
 	HARDCODED_CHAT           = ""
 	HARDCODED_OPENROUTER_KEY = ""
+	HARDCODED_GEMINI_KEY     = ""
 	API_URL                  = "https://api.green-api.com"
-	// OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
-	OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-	// OPENROUTER_MODEL = "<p>arcee-ai/trinity-mini:free</p>" // modelo gratuito
+	OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
+	GEMINI_URL               = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
 )
 
+// AI_PROVIDER define qual provedor usar: "openrouter" ou "gemini"
+// Pode ser sobrescrito pela variável de ambiente AI_PROVIDER
+const DEFAULT_AI_PROVIDER = "gemini"
+
 var OPENROUTER_MODELS = []string{
-	"google/gemma-3n-e4b-it:free",
-	"minimax/minimax-m2.5:free",
-	"baidu/qianfan-ocr-fast:free",
+	"openrouter/owl-alpha",
+	"poolside/laguna-xs.2:free",
+	"arcee-ai/trinity-large-thinking:free",
+	// "liquid/lfm-2.5-1.2b-instruct:free",
+	// "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+	// "google/gemma-3n-e4b-it:free",
+	// "minimax/minimax-m2.5:free",
+	// "baidu/qianfan-ocr-fast:free",
 }
 
 var chatsPermitidos map[string]bool
@@ -45,20 +54,17 @@ func getEnv(key, hardcoded string) string {
 
 func getAllowedChats() map[string]bool {
 	permitidos := make(map[string]bool)
-
 	raw := os.Getenv("ALLOWED_CHATS")
 	if raw == "" {
 		log.Println("WARN: ALLOWED_CHATS vazio — nenhum chat permitido")
 		return permitidos
 	}
-
 	for _, c := range strings.Split(raw, ",") {
 		c = strings.TrimSpace(c)
 		if c != "" {
 			permitidos[c] = true
 		}
 	}
-
 	return permitidos
 }
 
@@ -66,6 +72,13 @@ func getInstance() string      { return getEnv("GREEN_API_INSTANCE", HARDCODED_I
 func getToken() string         { return getEnv("GREEN_API_TOKEN", HARDCODED_TOKEN) }
 func getChatId() string        { return getEnv("GREEN_API_CHAT", HARDCODED_CHAT) }
 func getOpenRouterKey() string { return getEnv("OPENROUTER_API_KEY", HARDCODED_OPENROUTER_KEY) }
+func getGeminiKey() string     { return getEnv("GEMINI_API_KEY", HARDCODED_GEMINI_KEY) }
+func getAIProvider() string {
+	if p := os.Getenv("AI_PROVIDER"); p != "" {
+		return strings.ToLower(p)
+	}
+	return DEFAULT_AI_PROVIDER
+}
 
 // ================= STRUCTS =================
 
@@ -84,7 +97,6 @@ type CardapioDia struct {
 
 func buscarCardapio(dataAlvo string) (*CardapioDia, error) {
 	formData := url.Values{"data": {dataAlvo}}
-
 	res, err := http.PostForm("https://www.sar.unicamp.br/RU/view/site/cardapio.php", formData)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao fazer requisição: %v", err)
@@ -116,17 +128,14 @@ func buscarCardapio(dataAlvo string) (*CardapioDia, error) {
 	almocoPadrao := extrairRefeicao(*doc.Find("#normal .col-6").Eq(0).Find("table"))
 	almocoVegano := extrairRefeicao(*doc.Find("#normal .col-6").Eq(1).Find("table"))
 
-	// Tenta os seletores mais prováveis para o jantar
 	jantarPadrao := extrairRefeicao(*doc.Find("#jantar .col-6").Eq(0).Find("table"))
 	jantarVegano := extrairRefeicao(*doc.Find("#jantar .col-6").Eq(1).Find("table"))
 
-	// Fallback: tenta #vegetariano caso o site use outro id
 	if jantarPadrao == "" {
 		jantarPadrao = extrairRefeicao(*doc.Find("#vegetariano .col-6").Eq(0).Find("table"))
 		jantarVegano = extrairRefeicao(*doc.Find("#vegetariano .col-6").Eq(1).Find("table"))
 	}
 
-	// Fallback 2: tenta pegar pelo índice geral de tabelas
 	if jantarPadrao == "" {
 		log.Println("WARN: jantar não encontrado pelos seletores normais, tentando fallback por índice")
 		allSections := doc.Find(".col-6")
@@ -201,7 +210,6 @@ func formatarMensagem(cardapio *CardapioDia) string {
 	if jantarVeg == "" {
 		jantarVeg = "Não disponível"
 	}
-
 	return fmt.Sprintf(
 		"🍽️ Cardápio RU - %s\n\n"+
 			"🍛 ALMOÇO (Padrão):\n%s\n\n"+
@@ -216,7 +224,151 @@ func formatarMensagem(cardapio *CardapioDia) string {
 	)
 }
 
+// ================= AI — CAMADA GENÉRICA =================
+
+const systemPrompt = `Você é um assistente do Restaurante Universitário da Unicamp de Limeira (RU/Bandeco).
+
+Regras:
+- Formate a mensagem para ser legível e utilizando emojis
+- Se a pergunta for sobre o RU/Bandeco, responda de forma calorosa, fofa e acolhedora.
+- Use somente o contexto de cardápio fornecido quando houver.
+- Se o contexto não trouxer a informação pedida, diga isso claramente.
+- Não invente informações.
+- Se a mensagem não for sobre RU ou o cardapio, responda de forma curta, grossa e palavrões cheia de girias de minas gerais.
+- Se no cardápio da semana ou do dia tiver peixe, explique que é comprovado cientificamente pelo manual do bixo de 2013 que esse é o pior prato do bandeco e se salve não comendo isso e recomende comer o vegano.`
+
+// callModel é o ponto de entrada genérico para qualquer provedor de IA.
+// Internamente delega para callOpenRouter ou callGemini conforme AI_PROVIDER.
+func callModel(prompt string) string {
+	switch getAIProvider() {
+	case "gemini":
+		return callGemini(prompt)
+	case "openrouter":
+		return callOpenRouter(prompt)
+	default:
+		log.Printf("WARN: AI_PROVIDER desconhecido '%s', usando gemini", getAIProvider())
+		return callGemini(prompt)
+	}
+}
+
+// montarPrompt combina o system prompt, o contexto do cardápio e a pergunta do usuário.
+func montarPrompt(pergunta string) string {
+	contexto := montarContextoCardapio(pergunta)
+	return systemPrompt + "\n\nCONTEXTO:\n" + contexto + "\n\nPERGUNTA DO USUÁRIO:\n" + pergunta
+}
+
+// ================= GEMINI =================
+
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiContent struct {
+	Parts []geminiPart `json:"parts"`
+	Role  string       `json:"role,omitempty"`
+}
+
+type geminiRequest struct {
+	Contents []geminiContent `json:"contents"`
+}
+
+func callGemini(pergunta string) string {
+	key := getGeminiKey()
+	if key == "" {
+		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
+	}
+
+	payload := geminiRequest{
+		Contents: []geminiContent{
+			{Role: "user", Parts: []geminiPart{{Text: montarPrompt(pergunta)}}},
+		},
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	apiURL := GEMINI_URL + "?key=" + key
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Println("Erro ao criar request Gemini:", err)
+		return "Erro ao consultar IA."
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Println("Erro ao chamar Gemini:", err)
+		return "Erro ao consultar IA."
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "Erro ao processar resposta da IA."
+	}
+
+	candidates, ok := result["candidates"].([]interface{})
+	if !ok || len(candidates) == 0 {
+		log.Println("Gemini sem candidates:", result)
+		return "Não consegui responder agora."
+	}
+
+	content, _ := candidates[0].(map[string]interface{})["content"].(map[string]interface{})
+	parts, _ := content["parts"].([]interface{})
+	if len(parts) == 0 {
+		return "Resposta vazia da IA."
+	}
+
+	return parts[0].(map[string]interface{})["text"].(string)
+}
+
 // ================= OPENROUTER =================
+
+func callOpenRouter(pergunta string) string {
+	key := getOpenRouterKey()
+	if key == "" {
+		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
+	}
+
+	payload := map[string]interface{}{
+		"models": OPENROUTER_MODELS,
+		"messages": []map[string]string{
+			{"role": "user", "content": montarPrompt(pergunta)},
+		},
+	}
+	jsonData, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Println("Erro ao criar request OpenRouter:", err)
+		return "Erro ao consultar IA."
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("HTTP-Referer", "https://github.com/ru-bot")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Println("Erro ao chamar OpenRouter:", err)
+		return "Erro ao consultar IA."
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "Erro ao processar resposta da IA."
+	}
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		log.Println("OpenRouter sem choices:", result)
+		return "Não consegui responder agora."
+	}
+
+	log.Println(result)
+	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	return msg["content"].(string)
+}
+
+// ================= LÓGICA DO CARDÁPIO (contexto para IA) =================
 
 var diasSemana = map[string]time.Weekday{
 	"domingo": time.Sunday,
@@ -235,44 +387,36 @@ type RuCommand struct {
 	Refeicao string
 }
 
-// var reRuEstrito = regexp.MustCompile(`(?i)^/ru\s+(hoje|amanhã|amanha|domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)\s+(almoco|almoço|janta|jantar)$`)
 var reRuEstrito = regexp.MustCompile(`(?i)^/ru\s+(hoje|amanhã|amanha|domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)(?:\s+(almoco|almoço|janta|jantar))?$`)
+
 func parseRuCommand(text string) (*RuCommand, bool) {
-    text = strings.TrimSpace(strings.ToLower(text))
-    m := reRuEstrito.FindStringSubmatch(text)
-    if len(m) != 3 {
-        return nil, false
-    }
-
-    refeicao := strings.TrimSpace(m[2])
-    if refeicao == "janta" {
-        refeicao = "jantar"
-    }
-    if refeicao == "almoço" {
-        refeicao = "almoco"
-    }
-
-    return &RuCommand{
-        RawDate:  m[1],
-        Refeicao: refeicao,
-    }, true
+	text = strings.TrimSpace(strings.ToLower(text))
+	m := reRuEstrito.FindStringSubmatch(text)
+	if len(m) != 3 {
+		return nil, false
+	}
+	refeicao := strings.TrimSpace(m[2])
+	if refeicao == "janta" {
+		refeicao = "jantar"
+	}
+	if refeicao == "almoço" {
+		refeicao = "almoco"
+	}
+	return &RuCommand{RawDate: m[1], Refeicao: refeicao}, true
 }
 
 func resolverData(raw string) (time.Time, error) {
 	raw = strings.ToLower(strings.TrimSpace(raw))
-
 	switch raw {
 	case "hoje":
 		return time.Now(), nil
 	case "amanhã", "amanha":
 		return time.Now().AddDate(0, 0, 1), nil
 	}
-
 	dia, ok := diasSemana[raw]
 	if !ok {
 		return time.Time{}, fmt.Errorf("dia inválido")
 	}
-
 	return proximoDia(dia), nil
 }
 
@@ -281,27 +425,17 @@ func responderComandoRu(cmd *RuCommand) string {
 	if err != nil {
 		return "Formato inválido. Use: /ru hoje almoço | /ru terça jantar"
 	}
-
 	cardapio, err := buscarCardapio(formatDate(data))
 	if err != nil || cardapio == nil {
 		return "Não consegui obter o cardápio."
 	}
-
 	switch cmd.Refeicao {
 	case "jantar":
-		return fmt.Sprintf(
-			"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
-			cardapio.Data,
-			cardapio.Jantar.Padrao,
-			cardapio.Jantar.Vegano,
-		)
+		return fmt.Sprintf("🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
+			cardapio.Data, cardapio.Jantar.Padrao, cardapio.Jantar.Vegano)
 	case "almoco":
-		return fmt.Sprintf(
-			"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
-			cardapio.Data,
-			cardapio.Almoco.Padrao,
-			cardapio.Almoco.Vegano,
-		)
+		return fmt.Sprintf("🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
+			cardapio.Data, cardapio.Almoco.Padrao, cardapio.Almoco.Vegano)
 	default:
 		return formatarMensagem(cardapio)
 	}
@@ -309,274 +443,51 @@ func responderComandoRu(cmd *RuCommand) string {
 
 func extrairDiaSemana(pergunta string) (time.Weekday, bool) {
 	pergunta = strings.ToLower(pergunta)
-
-	// ===== AMANHÃ =====
 	if strings.Contains(pergunta, "amanhã") || strings.Contains(pergunta, "amanha") {
 		return time.Now().AddDate(0, 0, 1).Weekday(), true
 	}
-
-	// ===== DIAS DA SEMANA =====
 	for nome, dia := range diasSemana {
 		if strings.Contains(pergunta, nome) {
 			return dia, true
 		}
 	}
-
 	return 0, false
 }
 
 func proximoDia(target time.Weekday) time.Time {
 	hoje := time.Now()
 	diff := int(target - hoje.Weekday())
-
 	if diff < 0 {
 		diff += 7
 	}
-
 	return hoje.AddDate(0, 0, diff)
-}
-
-func tipoRefeicao(pergunta string) string {
-	if strings.Contains(pergunta, "jantar") || strings.Contains(pergunta, "janta") {
-		return "jantar"
-	} else if strings.Contains(pergunta, "jantar") || strings.Contains(pergunta, "janta") {
-		return "almoco"
-	}
-	return "nenhum"
 }
 
 func montarContextoCardapio(pergunta string) string {
 	var partes []string
-
 	hoje, err := buscarCardapio(formatDate(time.Now()))
 	if err == nil && hoje != nil {
 		partes = append(partes, "CARDÁPIO DE HOJE:\n"+formatarMensagem(hoje))
 	}
-
 	if dia, ok := extrairDiaSemana(pergunta); ok {
 		alvo, err := buscarCardapio(formatDate(proximoDia(dia)))
 		if err == nil && alvo != nil {
 			partes = append(partes, "CARDÁPIO DO DIA MENCIONADO:\n"+formatarMensagem(alvo))
 		}
 	}
-
 	if len(partes) == 0 {
 		return "Sem cardápio disponível no momento."
 	}
-
 	return strings.Join(partes, "\n\n")
 }
-
-func perguntarOpenRouter(pergunta string) string {
-	key := getOpenRouterKey()
-	if key == "" {
-		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
-	}
-
-	const prompt = `Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco).
-
-Regras:
-- Formate a mensagem para ser legível e utilizando emojis
-- Se a pergunta for sobre o RU/Bandeco, responda de forma calorosa, fofa e acolhedora.
-- Use somente o contexto de cardápio fornecido quando houver.
-- Se o contexto não trouxer a informação pedida, diga isso claramente.
-- Não invente informações.
-- Se a mensagem não for sobre RU, responda de forma curta, grossa e cheia de girias de minas gerais.`
-
-	contexto := montarContextoCardapio(pergunta)
-
-	payload := map[string]interface{}{
-		"models": OPENROUTER_MODELS,
-		"messages": []map[string]string{
-			{
-				"role":    "user",
-				"content": prompt + "\n\nCONTEXTO:\n" + contexto + "\n\nPERGUNTA DO USUÁRIO:\n" + pergunta,
-			},
-		},
-	}
-	jsonData, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Println("Erro ao criar request OpenRouter:", err)
-		return "Erro ao consultar IA."
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("HTTP-Referer", "https://github.com/ru-bot")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Println("Erro ao chamar OpenRouter:", err)
-		return "Erro ao consultar IA."
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "Erro ao processar resposta da IA."
-	}
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		log.Println("OpenRouter sem choices:", result)
-		return "Não consegui responder agora."
-	}
-
-	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
-	return msg["content"].(string)
-}
-
-// func perguntarOpenRouter(pergunta string) string {
-
-// 	var reCmd = regexp.MustCompile(`(?i)^/ru\s+(\w+)\s+(almoco|almoço|janta|jantar)$`)
-
-// 	if matches := reCmd.FindStringSubmatch(pergunta); len(matches) == 3 {
-
-// 		dataStr := strings.ToLower(matches[1])
-// 		refeicao := strings.ToLower(matches[2])
-
-// 		var data time.Time
-
-// 		// ===== HOJE =====
-// 		if dataStr == "hoje" {
-// 			data = time.Now()
-
-// 			// ===== AMANHÃ =====
-// 		} else if dataStr == "amanha" || dataStr == "amanhã" {
-// 			data = time.Now().AddDate(0, 0, 1)
-
-// 			// ===== DIA DA SEMANA =====
-// 		} else if dia, ok := diasSemana[dataStr]; ok {
-// 			data = proximoDia(dia)
-
-// 		} else {
-// 			return "Formato inválido. Use: /ru hoje almoço | /ru terça jantar"
-// 		}
-
-// 		cardapio, err := buscarCardapio(formatDate(data))
-// 		if err != nil || cardapio == nil {
-// 			return "Não consegui obter o cardápio."
-// 		}
-
-// 		// ===== RESPOSTA DIRETA =====
-// 		if refeicao == "janta" || refeicao == "jantar" {
-// 			return fmt.Sprintf(
-// 				"🍝 Jantar de %s:\n%s\n\n🌱 Vegano:\n%s",
-// 				cardapio.Data,
-// 				cardapio.Jantar.Padrao,
-// 				cardapio.Jantar.Vegano,
-// 			)
-// 		}
-// 		if refeicao == "almoço" || refeicao == "almoco" {
-// 			return fmt.Sprintf(
-// 				"🍛 Almoço de %s:\n%s\n\n🌱 Vegano:\n%s",
-// 				cardapio.Data,
-// 				cardapio.Almoco.Padrao,
-// 				cardapio.Almoco.Vegano,
-// 			)
-// 		}
-
-// 		return fmt.Sprintf(
-// 			"🍛 Almoço de %s:\n%s\n\n"+
-// 				"🥗 Vegano:\n%s\n\n"+
-// 				"🍝 Jantar:\n%s\n\n"+
-// 				"🌱 Vegano Jantar:\n%s\n\n",
-// 			cardapio.Data,
-// 			cardapio.Almoco.Padrao,
-// 			cardapio.Almoco.Vegano,
-// 			cardapio.Jantar.Padrao,
-// 			cardapio.Jantar.Vegano,
-// 		)
-// 	}
-
-// 	// ===== OPENROUTER =====
-// 	key := getOpenRouterKey()
-// 	if key == "" {
-// 		return "Desculpe, não consegui obter a informação no momento. Tente novamente mais tarde."
-// 	}
-
-// 	const prompt = `Você é um assistente do Restaurante Universitário da Unicamp (RU/Bandeco).
-// 	Sua função é responder apenas o necessário, com foco em utilidade e concisão.
-
-// Regras de tom:
-
-// Se a pergunta for sobre o RU/Bandeco, responda com tom muito caloroso, fofo e acolhedor, utilizando de emojis e afins.
-
-// Se a pergunta não for sobre o RU/Bandeco, responda de forma curta, direta, com gírias, com grosseria e com sarcasmo.
-
-// Regras de resposta:
-
-// Não explique regras internas.
-
-// Não faça introduções longas.
-
-// Não invente informações.
-
-// Se faltar contexto, faça uma pergunta objetiva.
-
-// Priorize a resposta mais curta que ainda seja correta.
-
-// Objetivo: ser útil no mínimo de palavras possível.`
-
-// 	payload := map[string]interface{}{
-// 		"model": OPENROUTER_MODEL,
-// 		"messages": []map[string]string{
-// 			{
-// 				"role":    "system",
-// 				"content": prompt,
-// 			},
-// 			{
-// 				"role":    "user",
-// 				"content": pergunta,
-// 			},
-// 		},
-// 	}
-
-// 	jsonData, _ := json.Marshal(payload)
-
-// 	req, err := http.NewRequest("POST", OPENROUTER_URL, bytes.NewBuffer(jsonData))
-// 	if err != nil {
-// 		log.Println("Erro ao criar request OpenRouter:", err)
-// 		return "Erro ao consultar IA."
-// 	}
-
-// 	req.Header.Set("Content-Type", "application/json")
-// 	req.Header.Set("Authorization", "Bearer "+key)
-// 	req.Header.Set("HTTP-Referer", "https://github.com/ru-bot")
-
-// 	resp, err := http.DefaultClient.Do(req)
-// 	if err != nil {
-// 		log.Println("Erro ao chamar OpenRouter:", err)
-// 		return "Erro ao consultar IA."
-// 	}
-// 	defer resp.Body.Close()
-
-// 	var result map[string]interface{}
-// 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-// 		return "Erro ao processar resposta da IA."
-// 	}
-
-// 	choices, ok := result["choices"].([]interface{})
-// 	if !ok || len(choices) == 0 {
-// 		log.Println("OpenRouter sem choices:", result)
-// 		return "Cansei, não irei mais responder perguntas, apenas comandos."
-// 	}
-
-// 	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
-// 	return msg["content"].(string)
-// }
 
 // ================= WHATSAPP =================
 
 func sendWhatsAppMessageTo(chatId, message string) {
 	apiURL := fmt.Sprintf("%s/waInstance%s/sendMessage/%s", API_URL, getInstance(), getToken())
-
 	if len(message) > 4000 {
 		message = message[:4000]
 	}
-
 	payload := map[string]string{"chatId": chatId, "message": message}
 	jsonData, _ := json.Marshal(payload)
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
@@ -600,13 +511,11 @@ type Notification struct {
 
 func receiveNotification() (*Notification, error) {
 	apiURL := fmt.Sprintf("%s/waInstance%s/receiveNotification/%s", API_URL, getInstance(), getToken())
-
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode == 200 {
 		var result Notification
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -617,19 +526,16 @@ func receiveNotification() (*Notification, error) {
 		}
 		return &result, nil
 	}
-
 	return nil, fmt.Errorf("status inesperado: %d", resp.StatusCode)
 }
 
 func deleteNotification(receiptId int) error {
 	apiURL := fmt.Sprintf("%s/waInstance%s/deleteNotification/%s/%d",
 		API_URL, getInstance(), getToken(), receiptId)
-
 	req, err := http.NewRequest(http.MethodDelete, apiURL, nil)
 	if err != nil {
 		return err
 	}
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -644,19 +550,16 @@ func extrairTexto(messageData map[string]interface{}) string {
 			return msg
 		}
 	}
-
 	if t, ok := messageData["extendedTextMessageData"].(map[string]interface{}); ok {
 		if msg, ok := t["text"].(string); ok {
 			return msg
 		}
 	}
-
 	return ""
 }
 
 func processarNotificacao(notif *Notification) {
 	body := notif.Body
-
 	typeWebhook, _ := body["typeWebhook"].(string)
 
 	jsonPretty, _ := json.MarshalIndent(body, "", "  ")
@@ -667,40 +570,31 @@ func processarNotificacao(notif *Notification) {
 		return
 	}
 
-	// ===== sender =====
 	senderData, ok := body["senderData"].(map[string]interface{})
 	if !ok {
 		return
 	}
-
 	chatId, _ := senderData["chatId"].(string)
 
-	// ===== messageData =====
 	messageData, ok := body["messageData"].(map[string]interface{})
 	if !ok {
 		return
 	}
 
-	// ===== EXTRAÇÃO CORRETA =====
 	msg := extrairTexto(messageData)
-
 	if msg == "" {
 		log.Println("Mensagem vazia ou tipo não suportado")
 		return
 	}
 
 	text := strings.ToLower(strings.TrimSpace(msg))
-
 	log.Printf("Mensagem recebida de %s: %s", chatId, text)
-
-	// ===================== COMANDOS =====================
 
 	switch {
 	case strings.Contains(text, "/ru hoje"):
 		cardapio, err := buscarCardapio(formatDate(time.Now()))
 		if err != nil || cardapio.Almoco.Padrao == "" {
-			resposta := perguntarOpenRouter("Cardápio indisponível hoje.")
-			sendWhatsAppMessageTo(chatId, resposta)
+			sendWhatsAppMessageTo(chatId, callModel("Cardápio indisponível hoje."))
 			return
 		}
 		sendWhatsAppMessageTo(chatId, formatarMensagem(cardapio))
@@ -708,8 +602,7 @@ func processarNotificacao(notif *Notification) {
 	case strings.Contains(text, "/ru semanal"):
 		semana, _ := buscarSemana()
 		if len(semana) == 0 {
-			resposta := perguntarOpenRouter("Cardápio semanal indisponível.")
-			sendWhatsAppMessageTo(chatId, resposta)
+			sendWhatsAppMessageTo(chatId, callModel("Cardápio semanal indisponível."))
 			return
 		}
 		sendWhatsAppMessageTo(chatId, formatarSemana(semana))
@@ -728,10 +621,7 @@ func processarNotificacao(notif *Notification) {
 				sendWhatsAppMessageTo(chatId, responderComandoRu(cmd))
 				return
 			}
-
-			resposta := perguntarOpenRouter(text)
-			sendWhatsAppMessageTo(chatId, resposta)
-			return
+			sendWhatsAppMessageTo(chatId, callModel(text))
 		}
 	}
 }
@@ -746,10 +636,9 @@ func startPolling() {
 			continue
 		}
 		if notif == nil {
-			time.Sleep(2 * time.Second) // <-- ESSENCIAL
+			time.Sleep(2 * time.Second)
 			continue
 		}
-
 		time.Sleep(1 * time.Second)
 		processarNotificacao(notif)
 		if err := deleteNotification(notif.ReceiptId); err != nil {
@@ -762,14 +651,12 @@ func startPolling() {
 
 func configurarInstancia() {
 	apiURL := fmt.Sprintf("%s/waInstance%s/setSettings/%s", API_URL, getInstance(), getToken())
-
 	payload := map[string]interface{}{
 		"incomingWebhook": "yes",
 		"outgoingWebhook": "no",
 		"stateWebhook":    "no",
 		"webhookUrl":      "",
 	}
-
 	jsonData, _ := json.Marshal(payload)
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -777,21 +664,16 @@ func configurarInstancia() {
 		return
 	}
 	defer resp.Body.Close()
-
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
 	log.Println("Configuração da instância:", result)
 }
 
 // ================= MAIN =================
+
 func selfPing(port string) {
-	// Espera 1 minuto para o servidor subir antes de começar
 	time.Sleep(1 * time.Minute)
-
-	// url := fmt.Sprintf("http://localhost:%s/", port)
 	url := fmt.Sprintf("https://wh-bandeco-bot.onrender.com/")
-	// log.Println("Iniciando self-ping a cada 10 minutos para:", url)
-
 	for {
 		resp, err := http.Get(url)
 		if err != nil {
@@ -810,7 +692,7 @@ func main() {
 	}
 	chatsPermitidos = getAllowedChats()
 	configurarInstancia()
-	log.Println("Bot RU Unicamp iniciado!")
+	log.Printf("Bot RU Unicamp iniciado! Provedor de IA: %s", getAIProvider())
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -818,8 +700,7 @@ func main() {
 	}
 
 	go startPolling()
-	// log.Println(perguntarOpenRouter("vai porra"))
-	go selfPing(port) // ← self-ping em goroutine paralela
+	go selfPing(port)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
