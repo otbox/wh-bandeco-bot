@@ -464,23 +464,42 @@ func proximoDia(target time.Weekday) time.Time {
 }
 
 func montarContextoCardapio(pergunta string) string {
-	var partes []string
-	hoje, err := buscarCardapio(formatDate(time.Now()))
-	if err == nil && hoje != nil {
-		partes = append(partes, "CARDÁPIO DE HOJE:\n"+formatarMensagem(hoje))
-	}
-	if dia, ok := extrairDiaSemana(pergunta); ok {
-		alvo, err := buscarCardapio(formatDate(proximoDia(dia)))
-		if err == nil && alvo != nil {
-			partes = append(partes, "CARDÁPIO DO DIA MENCIONADO:\n"+formatarMensagem(alvo))
-		}
-	}
-	if len(partes) == 0 {
-		return "Sem cardápio disponível no momento."
-	}
-	return strings.Join(partes, "\n\n")
-}
+    var partes []string
+    pergunta = strings.ToLower(pergunta)
+	
+    hoje, err := buscarCardapio(formatDate(time.Now()))
+    if err == nil && hoje != nil {
+        partes = append(partes, "CARDÁPIO DE HOJE:\n"+formatarMensagem(hoje))
+    }
+    if dia, ok := extrairDiaSemana(pergunta); ok {
+        alvo, err := buscarCardapio(formatDate(proximoDia(dia)))
+        if err == nil && alvo != nil {
+            partes = append(partes, "CARDÁPIO DO DIA MENCIONADO:\n"+formatarMensagem(alvo))
+        }
+    } else {
+        var cardapiosSemana []string
+        
+        for i := 0; i < 7; i++ {
+            dataAlvo := time.Now().AddDate(0, 0, i)
+            cardapioDia, err := buscarCardapio(formatDate(dataAlvo))
+            
+            if err == nil && cardapioDia != nil {
+                diaExtenso := traduzirDiaSemana(dataAlvo.Weekday()) 
+                cardapiosSemana = append(cardapiosSemana, fmt.Sprintf("Dia %s (%s):\n%s", dataAlvo.Format("02/01"), diaExtenso, formatarMensagem(cardapioDia)))
+            }
+        }
 
+        if len(cardapiosSemana) > 0 {
+            partes = append(partes, "CARDÁPIO DA SEMANA COMPLETA (Use isso para responder qual dia terá o prato perguntado):\n"+strings.Join(cardapiosSemana, "\n\n"))
+        }
+    }
+
+    if len(partes) == 0 {
+        return "Sem cardápio disponível no momento."
+    }
+
+    return strings.Join(partes, "\n\n")
+}
 // ================= WHATSAPP =================
 
 func sendWhatsAppMessageTo(chatId, message string) {
