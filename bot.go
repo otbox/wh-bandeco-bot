@@ -26,6 +26,10 @@ const (
 	API_URL                  = "https://api.green-api.com"
 	OPENROUTER_URL           = "https://openrouter.ai/api/v1/chat/completions"
 	GEMINI_URL               = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+	// CARDAPIO_URL é o endpoint do cardápio do RU de Limeira. A página oficial
+	// (https://prefeituralimeira.unicamp.br/produto/cardapio/) apenas redireciona
+	// para este sistema, que recebe POST com o campo "data" (YYYY-MM-DD).
+	CARDAPIO_URL = "https://sistemas.prefeituralimeira.unicamp.br/RU/view/site/cardapio.php"
 )
 
 // AI_PROVIDER define qual provedor usar: "openrouter" ou "gemini"
@@ -97,7 +101,7 @@ type CardapioDia struct {
 
 func buscarCardapio(dataAlvo string) (*CardapioDia, error) {
 	formData := url.Values{"data": {dataAlvo}}
-	res, err := http.PostForm("https://www.sar.unicamp.br/RU/view/site/cardapio.php", formData)
+	res, err := http.PostForm(CARDAPIO_URL, formData)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao fazer requisição: %v", err)
 	}
@@ -441,17 +445,14 @@ func responderComandoRu(cmd *RuCommand) string {
 	}
 }
 
-func extrairDiaSemana(pergunta string) (time.Weekday, bool) {
-	pergunta = strings.ToLower(pergunta)
-	if strings.Contains(pergunta, "amanhã") || strings.Contains(pergunta, "amanha") {
-		return time.Now().AddDate(0, 0, 1).Weekday(), true
-	}
-	for nome, dia := range diasSemana {
-		if strings.Contains(pergunta, nome) {
-			return dia, true
-		}
-	}
-	return 0, false
+var nomeDiaSemana = map[time.Weekday]string{
+	time.Sunday:    "domingo",
+	time.Monday:    "segunda-feira",
+	time.Tuesday:   "terça-feira",
+	time.Wednesday: "quarta-feira",
+	time.Thursday:  "quinta-feira",
+	time.Friday:    "sexta-feira",
+	time.Saturday:  "sábado",
 }
 
 func proximoDia(target time.Weekday) time.Time {
@@ -463,58 +464,45 @@ func proximoDia(target time.Weekday) time.Time {
 	return hoje.AddDate(0, 0, diff)
 }
 
-func traduzirDiaSemana(w time.Weekday) string {
-	dias := map[time.Weekday]string{
-		time.Sunday:    "Domingo",
-		time.Monday:    "Segunda-feira",
-		time.Tuesday:   "Terça-feira",
-		time.Wednesday: "Quarta-feira",
-		time.Thursday:  "Quinta-feira",
-		time.Friday:    "Sexta-feira",
-		time.Saturday:  "Sábado",
-	}
-	return dias[w]
-}
-
+// montarContextoCardapio monta o contexto entregue à IA com o cardápio dos
+// próximos 7 dias (a semana inteira, a partir de hoje). Assim a IA consegue
+// responder tanto perguntas pontuais ("almoço de amanhã") quanto agregadas
+// ("quantas vezes tem frango assado nesta semana"). Dias sem cardápio
+// publicado são ignorados.
 func montarContextoCardapio(pergunta string) string {
-	var partes []string
-	pergunta = strings.ToLower(pergunta)
+	hoje := time.Now()
 
-	hoje, err := buscarCardapio(formatDate(time.Now()))
-	if err == nil && hoje != nil {
-		partes = append(partes, "CARDÁPIO DE HOJE:\n"+formatarMensagem(hoje))
+	partes := []string{fmt.Sprintf(
+		"HOJE é %s (%s). Use a data como referência para termos como \"hoje\" e \"amanhã\".",
+		nomeDiaSemana[hoje.Weekday()], hoje.Format("02/01/2006"))}
+
+	for i := 0; i < 7; i++ {
+		dia := hoje.AddDate(0, 0, i)
+		cardapio, err := buscarCardapio(formatDate(dia))
+		if err != nil || cardapio == nil || cardapio.Almoco.Padrao == "" {
+			continue
+		}
+
+		var rotulo string
+		switch i {
+		case 0:
+			rotulo = "HOJE"
+		case 1:
+			rotulo = "AMANHÃ"
+		default:
+			rotulo = strings.ToUpper(nomeDiaSemana[dia.Weekday()])
+		}
+
+		partes = append(partes, fmt.Sprintf("=== %s (%s) ===\n%s",
+			rotulo, dia.Format("02/01/2006"), formatarMensagem(cardapio)))
 	}
 
-	if dia, ok := extrairDiaSemana(pergunta); ok {
-		alvo, err := buscarCardapio(formatDate(proximoDia(dia)))
-		if err == nil && alvo != nil {
-			partes = append(partes, "CARDÁPIO DO DIA MENCIONADO:\n"+formatarMensagem(alvo))
-		}
-	} else {
-		// Busca o cardápio dos próximos 7 dias para alimentar perguntas sem dia específico
-		var cardapiosSemana []string
-
-		for i := 0; i < 7; i++ {
-			dataAlvo := time.Now().AddDate(0, 0, i)
-			cardapioDia, err := buscarCardapio(formatDate(dataAlvo))
-
-			if err == nil && cardapioDia != nil {
-				diaExtenso := traduzirDiaSemana(dataAlvo.Weekday())
-				cardapiosSemana = append(cardapiosSemana, fmt.Sprintf("Dia %s (%s):\n%s", dataAlvo.Format("02/01"), diaExtenso, formatarMensagem(cardapioDia)))
-			}
-		}
-
-		if len(cardapiosSemana) > 0 {
-			partes = append(partes, "CARDÁPIO DA SEMANA COMPLETA (Use isso para responder qual dia terá o prato perguntado):\n"+strings.Join(cardapiosSemana, "\n\n"))
-		}
-	}
-
-	if len(partes) == 0 {
+	if len(partes) == 1 {
 		return "Sem cardápio disponível no momento."
 	}
-
-	return strings.Join(partes, "\n\n")
+	return "CARDÁPIO DA SEMANA:\n\n" + strings.Join(partes, "\n\n")
 }
+
 // ================= WHATSAPP =================
 
 func sendWhatsAppMessageTo(chatId, message string) {
